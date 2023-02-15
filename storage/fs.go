@@ -3,6 +3,10 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -17,21 +21,95 @@ type Filesystem struct {
 	dryRun bool
 }
 
-// Stat returns the Object structure describing object.
-func (f *Filesystem) Stat(ctx context.Context, url *url.URL) (*Object, error) {
-	st, err := os.Stat(url.Absolute())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, &ErrGivenObjectNotFound{ObjectAbsPath: url.Absolute()}
+// FileReader is abstraction of file reading along with
+// metadata about its content type.
+type FileReader interface {
+	io.ReadCloser
+	ContentType() string
+}
+
+// FileWriter is abstraction of writing to local.
+type FileWriter interface {
+	io.WriteCloser
+	io.WriterAt
+}
+
+// stdInOut implements FileReader and FileWriter interfaces.
+// it is a wrapper for os.Stdin and os.Stdout so that they can be
+// treated as a local file with security for operations.
+type stdInOut struct {
+	file *os.File
+}
+
+func (s *stdInOut) Write(p []byte) (n int, err error) {
+	return s.file.Write(p)
+}
+
+func (s *stdInOut) WriteAt(p []byte, off int64) (n int, err error) {
+	return s.file.WriteAt(p, off)
+}
+
+func (s *stdInOut) Read(p []byte) (n int, err error) {
+	return s.file.Read(p)
+}
+
+func (s *stdInOut) Close() error {
+	return nil
+}
+
+func (s *stdInOut) ContentType() string {
+	// piped read from os.Stdin is a plain text.
+	return "text/plain; charset=utf-8"
+}
+
+// localFile implements FileReader and FileWriter
+// and wraps local file.
+type localFile struct {
+	*os.File
+}
+
+func (f *localFile) ContentType() string {
+	contentType := mime.TypeByExtension(filepath.Ext(f.Name()))
+	if contentType == "" {
+		defer f.Seek(0, io.SeekStart)
+
+		const bufsize = 512
+		buf, err := ioutil.ReadAll(io.LimitReader(f, bufsize))
+		if err != nil {
+			return ""
 		}
-		return nil, err
+
+		return http.DetectContentType(buf)
+	}
+	return contentType
+}
+
+// Stat returns the Object structure describing object.
+func (f *Filesystem) Stat(_ context.Context, url *url.URL) (*Object, error) {
+	var stat os.FileInfo
+
+	if url.IsStdinOut() {
+		st, err := os.Stdin.Stat()
+		if err != nil {
+			return nil, err
+		}
+		stat = st
+	} else {
+		st, err := os.Stat(url.Absolute())
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, ErrGivenObjectNotFound
+			}
+			return nil, err
+		}
+		stat = st
 	}
 
-	mod := st.ModTime()
+	mod := stat.ModTime()
 	return &Object{
 		URL:     url,
-		Type:    ObjectType{st.Mode()},
-		Size:    st.Size(),
+		Type:    ObjectType{stat.Mode()},
+		Size:    stat.Size(),
 		ModTime: &mod,
 		Etag:    "",
 	}, nil
@@ -39,15 +117,15 @@ func (f *Filesystem) Stat(ctx context.Context, url *url.URL) (*Object, error) {
 
 // List returns the objects and directories reside in given src.
 func (f *Filesystem) List(ctx context.Context, src *url.URL, followSymlinks bool) <-chan *Object {
-	if src.IsWildcard() {
-		return f.expandGlob(ctx, src, followSymlinks)
-	}
-
 	obj, err := f.Stat(ctx, src)
 	isDir := err == nil && obj.Type.IsDir()
 
 	if isDir {
 		return f.walkDir(ctx, src, followSymlinks)
+	}
+
+	if src.HasGlob() {
+		return f.expandGlob(ctx, src, followSymlinks)
 	}
 
 	return f.listSingleObject(ctx, src)
@@ -86,7 +164,7 @@ func (f *Filesystem) expandGlob(ctx context.Context, src *url.URL, followSymlink
 			filename := filename
 
 			fileurl, _ := url.New(filename)
-			fileurl.SetRelative(src)
+			fileurl.SetRelative(src.Absolute())
 
 			obj, _ := f.Stat(ctx, fileurl)
 
@@ -120,7 +198,7 @@ func walkDir(ctx context.Context, fs *Filesystem, src *url.URL, followSymlinks b
 				return err
 			}
 
-			fileurl.SetRelative(src)
+			fileurl.SetRelative(src.Absolute())
 
 			//skip if symlink is pointing to a file and --no-follow-symlink
 			if !ShouldProcessUrl(fileurl, followSymlinks) {
@@ -157,7 +235,7 @@ func (f *Filesystem) walkDir(ctx context.Context, src *url.URL, followSymlinks b
 }
 
 // Copy copies given source to destination.
-func (f *Filesystem) Copy(ctx context.Context, src, dst *url.URL, _ Metadata) error {
+func (f *Filesystem) Copy(_ context.Context, src, dst *url.URL, _ Metadata) error {
 	if f.dryRun {
 		return nil
 	}
@@ -170,8 +248,8 @@ func (f *Filesystem) Copy(ctx context.Context, src, dst *url.URL, _ Metadata) er
 }
 
 // Delete deletes given file.
-func (f *Filesystem) Delete(ctx context.Context, url *url.URL) error {
-	if f.dryRun {
+func (f *Filesystem) Delete(_ context.Context, url *url.URL) error {
+	if f.dryRun || url.IsStdinOut() {
 		return nil
 	}
 
@@ -204,23 +282,30 @@ func (f *Filesystem) MkdirAll(path string) error {
 	return os.MkdirAll(path, os.ModePerm)
 }
 
-// Create creates a new os.File.
-func (f *Filesystem) Create(path string) (*os.File, error) {
-	if f.dryRun {
-		return &os.File{}, nil
+// Reader returns a FileReader for the given url.
+func (f *Filesystem) Reader(u *url.URL) (FileReader, error) {
+	if u.IsStdinOut() {
+		return &stdInOut{file: os.Stdin}, nil
 	}
 
-	return os.Create(path)
-}
-
-// Open opens the given source.
-func (f *Filesystem) Open(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0644)
+	file, err := os.OpenFile(u.Absolute(), os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 
-	return file, nil
+	return &localFile{file}, nil
+}
+
+// Writer returns a FileWriter for the given url.
+func (f *Filesystem) Writer(u *url.URL) (FileWriter, error) {
+	if u.IsStdinOut() {
+		return &stdInOut{file: os.Stdout}, nil
+	}
+	if f.dryRun {
+		return &os.File{}, nil
+	}
+
+	return os.Create(u.Absolute())
 }
 
 func sendObject(ctx context.Context, obj *Object, ch chan *Object) {
