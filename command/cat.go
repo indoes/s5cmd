@@ -27,41 +27,37 @@ Examples:
 		 > s5cmd {{.HelpName}} s3://bucket/prefix/object
 `
 
-func NewCatCommand() *cli.Command {
-	cmd := &cli.Command{
-		Name:               "cat",
-		HelpName:           "cat",
-		Usage:              "print remote object content",
-		CustomHelpTemplate: catHelpTemplate,
-		Before: func(c *cli.Context) error {
-			err := validateCatCommand(c)
-			if err != nil {
-				printError(commandFromContext(c), c.Command.Name, err)
-			}
+var catCommand = &cli.Command{
+	Name:               "cat",
+	HelpName:           "cat",
+	Usage:              "print remote object's contents to stdout",
+	CustomHelpTemplate: catHelpTemplate,
+	Before: func(c *cli.Context) error {
+		err := validateCatCommand(c)
+		if err != nil {
+			printError(givenCommand(c), c.Command.Name, err)
+		}
+		return err
+	},
+	Action: func(c *cli.Context) (err error) {
+		defer stat.Collect(c.Command.FullName(), &err)()
+
+		src, err := url.New(c.Args().Get(0))
+		op := c.Command.Name
+		fullCommand := givenCommand(c)
+		if err != nil {
+			printError(fullCommand, op, err)
 			return err
-		},
-		Action: func(c *cli.Context) (err error) {
-			defer stat.Collect(c.Command.FullName(), &err)()
+		}
 
-			src, err := url.New(c.Args().Get(0))
-			op := c.Command.Name
-			fullCommand := commandFromContext(c)
-			if err != nil {
-				printError(fullCommand, op, err)
-				return err
-			}
+		return Cat{
+			src:         src,
+			op:          op,
+			fullCommand: fullCommand,
 
-			return Cat{
-				src:         src,
-				op:          op,
-				fullCommand: fullCommand,
-
-				storageOpts: NewStorageOpts(c),
-			}.Run(c.Context)
-		},
-	}
-	cmd.BashComplete = getBashCompleteFn(cmd, true, false)
-	return cmd
+			storageOpts: NewStorageOpts(c),
+		}.Run(c.Context)
+	},
 }
 
 // Cat holds cat operation flags and states.
@@ -75,7 +71,7 @@ type Cat struct {
 
 // Run prints content of given source to standard output.
 func (c Cat) Run(ctx context.Context) error {
-	client, err := storage.NewRemoteClient(ctx, c.src, c.storageOpts)
+	client, err := storage.NewRemoteClient(c.src, c.storageOpts)
 	if err != nil {
 		printError(c.fullCommand, c.op, err)
 		return err
@@ -116,7 +112,7 @@ func validateCatCommand(c *cli.Context) error {
 		return fmt.Errorf("remote source must be an object")
 	}
 
-	if src.IsWildcard() {
+	if src.HasGlob() {
 		return fmt.Errorf("remote source %q can not contain glob characters", src)
 	}
 	return nil
