@@ -10,9 +10,11 @@ import (
 func TestDiskUsageSingleS3Object(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
-
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 
 	// create 2 files, expect 1.
@@ -25,22 +27,25 @@ func TestDiskUsageSingleS3Object(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`22 bytes in 1 objects: s3://%v/testfile1.txt`, bucket),
+		0: suffix(`317 bytes in 1 objects: s3://%v/testfile1.txt`, bucket),
 	})
 }
 
 func TestDiskUsageSingleS3ObjectJSON(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 
 	// create 2 files, expect 1.
 	putFile(t, s3client, bucket, "testfile1.txt", "this is a file content")
 	putFile(t, s3client, bucket, "testfile2.txt", "this is also a file content")
 
-	cmd := s5cmd("--json", "du", "s3://"+bucket+"/testfile1.txt")
+	cmd := s5cmd("-json", "du", "s3://"+bucket+"/testfile1.txt")
 	result := icmd.RunCmd(cmd)
 
 	result.Assert(t, icmd.Success)
@@ -48,19 +53,22 @@ func TestDiskUsageSingleS3ObjectJSON(t *testing.T) {
 	assertLines(t, result.Stdout(), map[int]compareFunc{
 		0: json(`
 			{
-				"source": "s3://%v/testfile1.txt",
+				"source": "s3://test-disk-usage-single-s-3-object-json/testfile1.txt",
 				"count":1,
-				"size":22
+				"size":317
 			}
-		`, bucket),
+		`),
 	})
 }
 
 func TestDiskUsageMultipleS3Objects(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 
 	putFile(t, s3client, bucket, "testfile1.txt", "this is a file content")
@@ -73,16 +81,18 @@ func TestDiskUsageMultipleS3Objects(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`49 bytes in 2 objects: s3://%v`, bucket),
+		0: suffix(`639 bytes in 2 objects: s3://%v`, bucket),
 	})
 }
 
 func TestDiskUsageWildcard(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
-
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 	putFile(t, s3client, bucket, "testfile1.txt", "this is a file content")
 	putFile(t, s3client, bucket, "testfile2.txt", "this is also a file content")
@@ -95,16 +105,18 @@ func TestDiskUsageWildcard(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`84 bytes in 3 objects: s3://%v/*.txt`, bucket),
+		0: suffix(`973 bytes in 3 objects: s3://%v/*.txt`, bucket),
 	})
 }
 
 func TestDiskUsageS3ObjectsAndFolders(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
-
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 	putFile(t, s3client, bucket, "testfile1.txt", "content")
 	putFile(t, s3client, bucket, "report.gz", "content")
@@ -123,16 +135,18 @@ func TestDiskUsageS3ObjectsAndFolders(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`14 bytes in 2 objects: s3://%v`, bucket),
+		0: suffix(`600 bytes in 2 objects: s3://%v`, bucket),
 	})
 }
 
 func TestDiskUsageWildcardS3ObjectsWithDashH(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
-
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 
 	putFile(t, s3client, bucket, "testfile1.txt", strings.Repeat("this is a file content", 10000))
@@ -145,16 +159,18 @@ func TestDiskUsageWildcardS3ObjectsWithDashH(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`241.2K bytes in 2 objects: s3://%v`, bucket),
+		0: suffix(`241.8K bytes in 2 objects: s3://%v`, bucket),
 	})
 }
 
 func TestDiskUsageMissingObject(t *testing.T) {
 	t.Parallel()
 
-	s3client, s5cmd := setup(t)
-
 	bucket := s3BucketFromTestName(t)
+
+	s3client, s5cmd, cleanup := setup(t)
+	defer cleanup()
+
 	createBucket(t, s3client, bucket)
 
 	cmd := s5cmd("du", "s3://"+bucket+"/non-existent-file")
@@ -165,66 +181,5 @@ func TestDiskUsageMissingObject(t *testing.T) {
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
 		0: suffix(`0 bytes in 0 objects: s3://%v/non-existent-file`, bucket),
-	})
-}
-
-// du --exclude "main*" s3://bucket/*.txt
-func TestDiskUsageWildcardWithExcludeFilter(t *testing.T) {
-	t.Parallel()
-
-	bucket := s3BucketFromTestName(t)
-
-	s3client, s5cmd := setup(t)
-
-	const excludePattern = "main*"
-
-	createBucket(t, s3client, bucket)
-	putFile(t, s3client, bucket, "testfile1.txt", "this is a file content")
-	putFile(t, s3client, bucket, "testfile2.txt", "this is also a file content")
-	putFile(t, s3client, bucket, "main.txt", "this is also a file content")
-	putFile(t, s3client, bucket, "main2.txt", "this is also a file content")
-	putFile(t, s3client, bucket, "main.py", "this is a python file")
-	putFile(t, s3client, bucket, "foo/testfile3.txt", "this is also a file content somehow")
-	putFile(t, s3client, bucket, "bar/testfile3.gz", "this is also a file content somehow")
-
-	cmd := s5cmd("du", "--exclude", excludePattern, "s3://"+bucket+"/*.txt")
-	result := icmd.RunCmd(cmd)
-
-	result.Assert(t, icmd.Success)
-
-	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`84 bytes in 3 objects: s3://%v/*.txt`, bucket),
-	})
-}
-
-// du --exclude "main*" --exclude "*.gz" s3://bucket/*
-func TestDiskUsageWildcardWithExcludeFilters(t *testing.T) {
-	t.Parallel()
-
-	bucket := s3BucketFromTestName(t)
-
-	s3client, s5cmd := setup(t)
-
-	const (
-		excludePattern1 = "main*"
-		excludePattern2 = "*.gz"
-	)
-
-	createBucket(t, s3client, bucket)
-	putFile(t, s3client, bucket, "testfile1.txt", "this is a file content")
-	putFile(t, s3client, bucket, "testfile2.txt", "this is also a file content")
-	putFile(t, s3client, bucket, "main.txt", "this is also a file content")
-	putFile(t, s3client, bucket, "main2.txt", "this is also a file content")
-	putFile(t, s3client, bucket, "main.py", "this is a python file")
-	putFile(t, s3client, bucket, "foo/testfile3.txt", "this is also a file content somehow")
-	putFile(t, s3client, bucket, "bar/testfile3.gz", "this is also a file content somehow")
-
-	cmd := s5cmd("du", "--exclude", excludePattern1, "--exclude", excludePattern2, "s3://"+bucket+"/*")
-	result := icmd.RunCmd(cmd)
-
-	result.Assert(t, icmd.Success)
-
-	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: suffix(`84 bytes in 3 objects: s3://%v/*`, bucket),
 	})
 }

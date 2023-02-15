@@ -8,25 +8,17 @@ import (
 	"os"
 	"time"
 
-	"github.com/peak/s5cmd/log"
 	"github.com/peak/s5cmd/storage/url"
 	"github.com/peak/s5cmd/strutil"
 )
 
 var (
+	// ErrGivenObjectNotFound indicates a specified object is not found.
+	ErrGivenObjectNotFound = fmt.Errorf("given object not found")
 
 	// ErrNoObjectFound indicates there are no objects found from a given directory.
 	ErrNoObjectFound = fmt.Errorf("no object found")
 )
-
-// ErrGivenObjectNotFound indicates a specified object is not found.
-type ErrGivenObjectNotFound struct {
-	ObjectAbsPath string
-}
-
-func (e *ErrGivenObjectNotFound) Error() string {
-	return fmt.Sprintf("given object %v not found", e.ObjectAbsPath)
-}
 
 // Storage is an interface for storage operations that is common
 // to local filesystem and remote object storage.
@@ -54,51 +46,24 @@ func NewLocalClient(opts Options) *Filesystem {
 	return &Filesystem{dryRun: opts.DryRun}
 }
 
-func NewRemoteClient(ctx context.Context, url *url.URL, opts Options) (*S3, error) {
-	newOpts := Options{
-		MaxRetries:             opts.MaxRetries,
-		Endpoint:               opts.Endpoint,
-		NoVerifySSL:            opts.NoVerifySSL,
-		DryRun:                 opts.DryRun,
-		NoSignRequest:          opts.NoSignRequest,
-		UseListObjectsV1:       opts.UseListObjectsV1,
-		RequestPayer:           opts.RequestPayer,
-		Profile:                opts.Profile,
-		CredentialFile:         opts.CredentialFile,
-		LogLevel:               opts.LogLevel,
-		bucket:                 url.Bucket,
-		region:                 opts.region,
-		NoSuchUploadRetryCount: opts.NoSuchUploadRetryCount,
-	}
-	return newS3Storage(ctx, newOpts)
+func NewRemoteClient(_ *url.URL, opts Options) (*S3, error) {
+	return newS3Storage(opts, cachedSession)
 }
 
-func NewClient(ctx context.Context, url *url.URL, opts Options) (Storage, error) {
+func NewClient(url *url.URL, opts Options) (Storage, error) {
 	if url.IsRemote() {
-		return NewRemoteClient(ctx, url, opts)
+		return NewRemoteClient(url, opts)
 	}
 	return NewLocalClient(opts), nil
 }
 
 // Options stores configuration for storage.
 type Options struct {
-	MaxRetries             int
-	NoSuchUploadRetryCount int
-	Endpoint               string
-	NoVerifySSL            bool
-	DryRun                 bool
-	NoSignRequest          bool
-	UseListObjectsV1       bool
-	LogLevel               log.LogLevel
-	RequestPayer           string
-	Profile                string
-	CredentialFile         string
-	bucket                 string
-	region                 string
-}
-
-func (o *Options) SetRegion(region string) {
-	o.region = region
+	MaxRetries  int
+	Endpoint    string
+	Region      string
+	NoVerifySSL bool
+	DryRun      bool
 }
 
 // Object is a generic type which contains metadata for storage items.
@@ -110,7 +75,6 @@ type Object struct {
 	Size         int64        `json:"size,omitempty"`
 	StorageClass StorageClass `json:"storage_class,omitempty"`
 	Err          error        `json:"error,omitempty"`
-	retryID      string
 }
 
 // String returns the string representation of Object.
@@ -202,6 +166,17 @@ func (s StorageClass) IsGlacier() bool {
 	return s == "GLACIER"
 }
 
+// notImplemented is a structure which is used on the unsupported operations.
+type notImplemented struct {
+	apiType string
+	method  string
+}
+
+// Error returns the string representation of Error for notImplemented.
+func (e notImplemented) Error() string {
+	return fmt.Sprintf("%q is not supported on %q storage", e.method, e.apiType)
+}
+
 type Metadata map[string]string
 
 // NewMetadata will return an empty metadata object.
@@ -215,24 +190,6 @@ func (m Metadata) ACL() string {
 
 func (m Metadata) SetACL(acl string) Metadata {
 	m["ACL"] = acl
-	return m
-}
-
-func (m Metadata) CacheControl() string {
-	return m["CacheControl"]
-}
-
-func (m Metadata) SetCacheControl(cacheControl string) Metadata {
-	m["CacheControl"] = cacheControl
-	return m
-}
-
-func (m Metadata) Expires() string {
-	return m["Expires"]
-}
-
-func (m Metadata) SetExpires(expires string) Metadata {
-	m["Expires"] = expires
 	return m
 }
 
@@ -269,14 +226,5 @@ func (m Metadata) SSEKeyID() string {
 
 func (m Metadata) SetSSEKeyID(kid string) Metadata {
 	m["EncryptionKeyID"] = kid
-	return m
-}
-
-func (m Metadata) ContentEncoding() string {
-	return m["ContentEncoding"]
-}
-
-func (m Metadata) SetContentEncoding(contentEncoding string) Metadata {
-	m["ContentEncoding"] = contentEncoding
 	return m
 }

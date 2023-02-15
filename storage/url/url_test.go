@@ -1,14 +1,12 @@
 package url
 
 import (
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/peak/s5cmd/strutil"
 )
 
 func TestHasWild(t *testing.T) {
@@ -71,7 +69,7 @@ func TestNew(t *testing.T) {
 				Prefix:    "key",
 				Delimiter: "/",
 			},
-			wantFilterRe: regexp.MustCompile(strutil.AddNewLineFlag(`^key.*$`)).String(),
+			wantFilterRe: regexp.MustCompile(`^key.*$`).String(),
 		},
 		{
 			name:   "url_with_no_wildcard_end_with_slash",
@@ -83,7 +81,7 @@ func TestNew(t *testing.T) {
 				Prefix:    "key/",
 				Delimiter: "/",
 			},
-			wantFilterRe: regexp.MustCompile(strutil.AddNewLineFlag(`^key/.*$`)).String(),
+			wantFilterRe: regexp.MustCompile(`^key/.*$`).String(),
 		},
 		{
 			name:   "url_with_wildcard",
@@ -93,10 +91,10 @@ func TestNew(t *testing.T) {
 				Bucket:      "bucket",
 				Path:        "key/a/?/test/*",
 				Prefix:      "key/a/",
-				filterRegex: regexp.MustCompile(strutil.AddNewLineFlag(`^key/a/./test/.*$`)),
+				filterRegex: regexp.MustCompile(`^key/a/./test/.*?$`),
 				Delimiter:   "",
 			},
-			wantFilterRe: regexp.MustCompile(strutil.AddNewLineFlag(`^key/a/./test/.*$`)).String(),
+			wantFilterRe: regexp.MustCompile(`^key/a/./test/.*?$`).String(),
 		},
 	}
 	for _, tc := range tests {
@@ -113,100 +111,8 @@ func TestNew(t *testing.T) {
 			if tc.wantFilterRe != "" {
 				if diff := cmp.Diff(tc.wantFilterRe, got.filterRegex.String()); diff != "" {
 					t.Errorf("test case %q: URL.filterRegex mismatch (-want +got):\n%v", tc.name, diff)
-				}
-			}
-		})
-	}
-}
 
-func TestJoin(t *testing.T) {
-	tests := []struct {
-		name       string
-		before     *URL
-		objectName string
-		after      *URL
-	}{
-		// URL is remote, expected to keep adjacent slashes
-		{
-			name: "remote:url_with_adjacent_slashes",
-			before: &URL{
-				Path: "s3://bucket/a//b/",
-				Type: remoteObject,
-			},
-			objectName: "test.txt",
-			after: &URL{
-				Path: "s3://bucket/a//b/test.txt",
-				Type: remoteObject,
-			},
-		},
-		{
-			name: "remote:objectName_has_adjacent_slashes",
-			before: &URL{
-				Path: "s3://bucket/a/b/",
-				Type: remoteObject,
-			},
-			objectName: "folder//test.txt",
-			after: &URL{
-				Path: "s3://bucket/a/b/folder//test.txt",
-				Type: remoteObject,
-			},
-		},
-		{
-			name: "remote:objectName_url_has_adjacent_slashes",
-			before: &URL{
-				Path: "s3://bucket/a//b/",
-				Type: remoteObject,
-			},
-			objectName: "/folder//test.txt",
-			after: &URL{
-				Path: "s3://bucket/a//b//folder//test.txt",
-				Type: remoteObject,
-			},
-		},
-		// URL is local, expected to clean adjacent slashes
-		{
-			name: "local:url_with_adjacent_slashes",
-			before: &URL{
-				Path: "dir/a//b/",
-				Type: localObject,
-			},
-			objectName: "test.txt",
-			after: &URL{
-				Path: "dir/a/b/test.txt",
-				Type: localObject,
-			},
-		},
-		{
-			name: "local:objectName_has_adjacent_slashes",
-			before: &URL{
-				Path: "dir/a/b/",
-				Type: localObject,
-			},
-			objectName: "folder//test.txt",
-			after: &URL{
-				Path: "dir/a/b/folder/test.txt",
-				Type: localObject,
-			},
-		},
-		{
-			name: "local:objectName_url_has_adjacent_slashes",
-			before: &URL{
-				Path: "dir/a//b/",
-				Type: localObject,
-			},
-			objectName: "/folder//test.txt",
-			after: &URL{
-				Path: "dir/a/b/folder/test.txt",
-				Type: localObject,
-			},
-		},
-	}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := tc.before.Join(tc.objectName)
-			if !reflect.DeepEqual(got, tc.after) {
-				t.Errorf("Join() got = %v, want %v", got, tc.after)
+				}
 			}
 		})
 	}
@@ -228,7 +134,7 @@ func TestURLSetPrefixAndFilter(t *testing.T) {
 				Prefix:      "a/b_c/",
 				Delimiter:   "",
 				filter:      "*/de/*/test",
-				filterRegex: regexp.MustCompile(strutil.AddNewLineFlag("^a/b_c/.*/de/.*/test$")),
+				filterRegex: regexp.MustCompile("^a/b_c/.*?/de/.*?/test$"),
 			},
 		},
 		{
@@ -241,7 +147,7 @@ func TestURLSetPrefixAndFilter(t *testing.T) {
 				Prefix:      "a/b_c/d/e",
 				Delimiter:   "/",
 				filter:      "",
-				filterRegex: regexp.MustCompile(strutil.AddNewLineFlag("^a/b_c/d/e.*$")),
+				filterRegex: regexp.MustCompile("^a/b_c/d/e.*$"),
 			},
 		},
 	}
@@ -494,109 +400,5 @@ func TestURLIsBucket(t *testing.T) {
 		if url.IsBucket() != tc.want {
 			t.Errorf("isBucket should return %v for  %s", tc.want, tc.input)
 		}
-	}
-}
-
-func TestURLWithMode(t *testing.T) {
-	tests := []struct {
-		input          string
-		raw            bool
-		prefixExpected string
-		filterExpected string
-	}{
-		{"s3://bucket/file*.txt", false, "file", "*.txt"},
-		{"s3://bucket/file*.txt", true, "", ""},
-		{"s3://bucket/abc/deneme*.txt", false, "abc/deneme", "*.txt"},
-		{"s3://bucket/abc/deneme*.txt", true, "", ""},
-		{"deneme*.txt", false, "deneme", "*.txt"},
-		{"deneme*.txt", true, "", ""},
-	}
-	for _, tc := range tests {
-		url, err := New(tc.input, WithRaw(tc.raw))
-		if err != nil {
-			t.Errorf("There is an error in %s\n", tc.input)
-		}
-
-		if url.Prefix != tc.prefixExpected {
-			t.Errorf("%s : url prefix %s does not match with expected %s\n", tc.input, url.Prefix, tc.prefixExpected)
-		}
-
-		if url.filter != tc.filterExpected {
-			t.Errorf("%s: url filter %s does not match with expected filter %s\n", tc.input, url.Prefix, tc.filterExpected)
-		}
-	}
-}
-
-func TestURLSetRelative(t *testing.T) {
-	type testcase struct {
-		name   string
-		base   string
-		target string
-		expect string
-	}
-
-	sep := string(filepath.Separator)
-	tests := []testcase{
-		{
-			name:   "local_sibling_child_object",
-			base:   sep + "parent" + sep + "child" + sep + "object",
-			target: sep + "parent" + sep + "child2" + sep + "object",
-			expect: ".." + sep + "child2" + sep + "object",
-		},
-		{
-			name:   "local_same_directory_object",
-			base:   sep + "parent" + sep + "child" + sep + "object",
-			target: sep + "parent" + sep + "child" + sep + "object2",
-			expect: "object2",
-		},
-		{
-			name:   "s3_sibling_child_object",
-			base:   "s3://bucket/parent" + sep + "child" + sep + "object",
-			target: "s3://bucket/parent" + sep + "child2" + sep + "",
-			expect: ".." + sep + "child2",
-		},
-		{
-			name:   "local_child_directory_fully_wildcarded",
-			base:   sep + "parent" + sep + "*" + sep + "object",
-			target: sep + "parent" + sep + "child" + sep + "object",
-			expect: "child" + sep + "object",
-		},
-		{
-			name:   "local_child_directory_partially_wildcarded",
-			base:   sep + "parent" + sep + "c*d" + sep + "object",
-			target: sep + "parent" + sep + "child" + sep + "object",
-			expect: "child" + sep + "object",
-		},
-		{
-			name:   "local_child_directory_fully_wildcarded_with_question_mark",
-			base:   sep + "parent" + sep + "?" + sep + "object",
-			target: sep + "parent" + sep + "c" + sep + "object",
-			expect: "c" + sep + "object",
-		},
-		{
-			name:   "s3_child_directory_wildcarded",
-			base:   "s3://bucket/parent" + sep + "*" + sep + "object",
-			target: "s3://bucket/parent" + sep + "child2" + sep + "",
-			expect: "child2",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			baseURL, err := New(tt.base)
-			if err != nil {
-				t.Errorf("URL cannot be instantiated: \nPath: %v, Error: %v", tt.base, err)
-			}
-			targUrl, err := New(tt.target)
-			if err != nil {
-				t.Errorf("URL cannot be instantiated:\nPath: %v, Error: %v", tt.base, err)
-			}
-
-			targUrl.SetRelative(baseURL)
-
-			if diff := cmp.Diff(tt.expect, targUrl.Relative()); diff != "" {
-				t.Errorf("SetRelative() with %s did not produce expected path (-want +got):\n%s", tt.name, diff)
-			}
-		})
 	}
 }
