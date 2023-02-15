@@ -4,14 +4,11 @@ package url
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
-
-	"github.com/peak/s5cmd/strutil"
 )
 
 const (
@@ -47,32 +44,18 @@ type URL struct {
 	relativePath string
 	filter       string
 	filterRegex  *regexp.Regexp
-	raw          bool
-}
-
-type Option func(u *URL)
-
-func WithRaw(mode bool) Option {
-	return func(u *URL) {
-		u.raw = mode
-	}
 }
 
 // New creates a new URL from given path string.
-func New(s string, opts ...Option) (*URL, error) {
-	// TODO Change strCut to strings.Cut when minimum required Go version is 1.18
-	scheme, rest, isFound := strCut(s, "://")
-	if !isFound {
+func New(s string) (*URL, error) {
+	split := strings.Split(s, "://")
+
+	if len(split) == 1 {
 		url := &URL{
 			Type:   localObject,
 			Scheme: "",
 			Path:   s,
 		}
-
-		for _, opt := range opts {
-			opt(url)
-		}
-
 		if err := url.setPrefixAndFilter(); err != nil {
 			return nil, err
 		}
@@ -83,6 +66,12 @@ func New(s string, opts ...Option) (*URL, error) {
 		return url, nil
 	}
 
+	if len(split) != 2 {
+		return nil, fmt.Errorf("storage: unknown url format %q", s)
+	}
+
+	scheme, rest := split[0], split[1]
+
 	if scheme != "s3" {
 		return nil, fmt.Errorf("s3 url should start with %q", s3Scheme)
 	}
@@ -92,7 +81,7 @@ func New(s string, opts ...Option) (*URL, error) {
 	key := ""
 	bucket := parts[0]
 	if len(parts) == 2 {
-		key = parts[1]
+		key = strings.TrimLeft(parts[1], s3Separator)
 	}
 
 	if bucket == "" {
@@ -110,30 +99,20 @@ func New(s string, opts ...Option) (*URL, error) {
 		Path:   key,
 	}
 
-	for _, opt := range opts {
-		opt(url)
-	}
-
 	if err := url.setPrefixAndFilter(); err != nil {
 		return nil, err
 	}
 	return url, nil
 }
 
-// strCut slices s around the first instance of sep,
-// returning the text before and after sep.
-// The found result reports whether sep appears in s.
-// If sep does not appear in s, cut returns s, "", false.
-func strCut(s string, sep string) (before string, after string, isFound bool) {
-	if i := strings.Index(s, sep); i >= 0 {
-		return s[:i], s[i+len(sep):], true
-	}
-	return s, "", false
-}
-
 // IsRemote reports whether the object is stored on a remote storage system.
 func (u *URL) IsRemote() bool {
 	return u.Type == remoteObject
+}
+
+// IsStdinOut notes whether this url is os.Stdin/os.Stdout.
+func (u *URL) IsStdinOut() bool {
+	return u.Path == "-"
 }
 
 // IsPrefix reports whether the remote object is an S3 prefix, and does not
@@ -192,15 +171,8 @@ func (u *URL) Join(s string) *URL {
 	}
 
 	clone := u.Clone()
-	if !clone.IsRemote() {
-		// URL is local, thus clean the path by using path.Join which
-		// removes adjacent slashes.
-		clone.Path = path.Join(clone.Path, s)
-		return clone
-	}
-	// URL is remote, keep them as it is and join using string.Join which
-	// allows to use adjacent slashes
-	clone.Path = strings.Join([]string{clone.Path, s}, "")
+	clone.Path = path.Join(clone.Path, s)
+
 	return clone
 }
 
@@ -228,30 +200,27 @@ func (u *URL) remoteURL() string {
 // prefix is the part that comes before the wildcard string.
 //
 // Example:
-//
-//	key: a/b/test?/c/*.tsv
-//	prefix: a/b/test
-//	filter: ?/c/*
-//	regex: ^a/b/test./c/.*?\\.tsv$
-//	delimiter: ""
+//		key: a/b/test?/c/*.tsv
+//		prefix: a/b/test
+//		filter: ?/c/*
+//		regex: ^a/b/test./c/.*?\\.tsv$
+//		delimiter: ""
 //
 // It prepares delimiter, prefix and regex for regular strings.
 // These are used in S3 listing operations.
 // See: https://docs.aws.amazon.com/AmazonS3/latest/dev/ListingKeysHierarchy.html
 //
 // Example:
+//		key: a/b/c
+//		prefix: a/b/c
+//		filter: ""
+//		regex: ^a/b/c.*$
+//		delimiter: "/"
 //
-//	key: a/b/c
-//	prefix: a/b/c
-//	filter: ""
-//	regex: ^a/b/c.*$
-//	delimiter: "/"
 func (u *URL) setPrefixAndFilter() error {
-	if u.raw {
-		return nil
-	}
-
-	if loc := strings.IndexAny(u.Path, globCharacters); loc < 0 {
+	loc := strings.IndexAny(u.Path, globCharacters)
+	wildOperation := loc > -1
+	if !wildOperation {
 		u.Delimiter = s3Separator
 		u.Prefix = u.Path
 	} else {
@@ -261,12 +230,12 @@ func (u *URL) setPrefixAndFilter() error {
 
 	filterRegex := matchAllRe
 	if u.filter != "" {
-		filterRegex = strutil.WildCardToRegexp(u.filter)
+		filterRegex = regexp.QuoteMeta(u.filter)
+		filterRegex = strings.Replace(filterRegex, "\\?", ".", -1)
+		filterRegex = strings.Replace(filterRegex, "\\*", ".*?", -1)
 	}
 	filterRegex = regexp.QuoteMeta(u.Prefix) + filterRegex
-	filterRegex = strutil.MatchFromStartToEnd(filterRegex)
-	filterRegex = strutil.AddNewLineFlag(filterRegex)
-	r, err := regexp.Compile(filterRegex)
+	r, err := regexp.Compile("^" + filterRegex + "$")
 	if err != nil {
 		return err
 	}
@@ -291,45 +260,13 @@ func (u *URL) Clone() *URL {
 }
 
 // SetRelative explicitly sets the relative path of u against given base value.
-// If the base path contains `globCharacters` then, the relative path is
-// determined with respect to the parent directory of the so called wildcarded
-// object.
-func (u *URL) SetRelative(base *URL) {
-	basePath := base.Absolute()
-	if base.IsWildcard() {
-		// When the basePath includes a wildcard character (globCharacters)
-		// replace basePath with its substring up to the
-		// index of the first instance of a wildcard character.
-		//
-		// If we don't handle this, the filepath.Dir()
-		// will assume those wildcards as a part of the name.
-		// Consequently the filepath.Rel() will determine
-		// the relative path incorrectly since the wildcarded
-		// path string won't match with the actual name of the
-		// object.
-		// e.g. base.Absolute(): "/a/*/n"
-		//      u.Absolute()   : "/a/b/n"
-		//
-		// if we don't trim substring from globCharacters on
-		// filepath.Dir() will give: "/a/*"
-		// consequently the
-		// filepath.Rel() will give: "../b/c" rather than "b/c"
-		// since "b" and "*" are not the same.
-		loc := strings.IndexAny(basePath, globCharacters)
-		if loc >= 0 {
-			basePath = basePath[:loc]
-		}
-	}
-	baseDir := filepath.Dir(basePath)
-	u.relativePath, _ = filepath.Rel(baseDir, u.Absolute())
+func (u *URL) SetRelative(base string) {
+	dir := filepath.Dir(base)
+	u.relativePath, _ = filepath.Rel(dir, u.Absolute())
 }
 
-// Match reports whether if given key matches with the object.
+// Match checks if given key matches with the object.
 func (u *URL) Match(key string) bool {
-	if u.filterRegex == nil {
-		return false
-	}
-
 	if !u.filterRegex.MatchString(key) {
 		return false
 	}
@@ -356,9 +293,9 @@ func (u *URL) MarshalJSON() ([]byte, error) {
 	return json.Marshal(u.String())
 }
 
-// IsWildcard reports whether if a string contains any wildcard chars.
-func (u *URL) IsWildcard() bool {
-	return !u.raw && hasGlobCharacter(u.Path)
+// HasGlob checks if a string contains any wildcard chars.
+func (u *URL) HasGlob() bool {
+	return hasGlobCharacter(u.Path)
 }
 
 // parseBatch parses keys for wildcard operations.
@@ -366,10 +303,10 @@ func (u *URL) IsWildcard() bool {
 // wildcard part (filter)
 //
 // Example:
+//		key: a/b/test2/c/example_file.tsv
+//		prefix: a/b/
+//		output: test2/c/example_file.tsv
 //
-//	key: a/b/test2/c/example_file.tsv
-//	prefix: a/b/
-//	output: test2/c/example_file.tsv
 func parseBatch(prefix string, key string) string {
 	index := strings.LastIndex(prefix, s3Separator)
 	if index < 0 || !strings.HasPrefix(key, prefix) {
@@ -385,10 +322,10 @@ func parseBatch(prefix string, key string) string {
 // path.
 //
 // Example:
+//		key: a/b/c/d
+//		prefix: a/b
+//		output: c/
 //
-//	key: a/b/c/d
-//	prefix: a/b
-//	output: c/
 func parseNonBatch(prefix string, key string) string {
 	if key == prefix || !strings.HasPrefix(key, prefix) {
 		return key
@@ -411,16 +348,7 @@ func parseNonBatch(prefix string, key string) string {
 	return trimmedKey
 }
 
-// hasGlobCharacter reports whether if a string contains any wildcard chars.
+// hasGlobCharacter checks if a string contains any wildcard chars.
 func hasGlobCharacter(s string) bool {
 	return strings.ContainsAny(s, globCharacters)
-}
-
-func (u *URL) EscapedPath() string {
-	sourceKey := strings.TrimPrefix(u.String(), "s3://")
-	sourceKeyElements := strings.Split(sourceKey, "/")
-	for i, element := range sourceKeyElements {
-		sourceKeyElements[i] = url.QueryEscape(element)
-	}
-	return strings.Join(sourceKeyElements, "/")
 }
