@@ -375,18 +375,14 @@ func (c Copy) doDownload(ctx context.Context, srcurl *url.URL, dsturl *url.URL) 
 		return err
 	}
 
-	fwriter, err := dstClient.Writer(dsturl)
+	file, err := dstClient.Create(dsturl.Absolute())
 	if err != nil {
 		return err
 	}
 
-	defer fwriter.Close()
+	defer file.Close()
 
-	if dsturl.IsStdinOut() {
-		return srcClient.Write(ctx, srcurl, fwriter)
-	}
-
-	size, err := srcClient.Get(ctx, srcurl, fwriter, c.concurrency, c.partSize)
+	size, err := srcClient.Get(ctx, srcurl, file, c.concurrency, c.partSize)
 	if err != nil {
 		_ = dstClient.Delete(ctx, dsturl)
 		return err
