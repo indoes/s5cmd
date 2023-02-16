@@ -66,12 +66,17 @@ github.com/hashicorp/go-multierror
 github.com/iancoleman/strcase
 # github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af
 github.com/jmespath/go-jmespath
-# github.com/johannesboyne/gofakes3 v0.0.0-20191228161223-9aee1c78a252 => github.com/igungor/gofakes3 v0.0.4
-github.com/johannesboyne/gofakes3
-github.com/johannesboyne/gofakes3/backend/s3bolt
-github.com/johannesboyne/gofakes3/backend/s3mem
-github.com/johannesboyne/gofakes3/internal/goskipiter
-github.com/johannesboyne/gofakes3/internal/s3io
+github.com/igungor/gofakes3 v0.0.4
+#github.com/igungor/gofakes3
+github.com/igungor/gofakes3/backend/s3bolt
+github.com/igungor/gofakes3/backend/s3mem
+github.com/igungor/gofakes3/internal/goskipiter
+github.com/igungor/gofakes3/internal/s3io
+#github.com/johannesboyne/gofakes3
+#github.com/johannesboyne/gofakes3/backend/s3bolt
+#github.com/johannesboyne/gofakes3/backend/s3mem
+#github.com/johannesboyne/gofakes3/internal/goskipiter
+#github.com/johannesboyne/gofakes3/internal/s3io
 # github.com/karrick/godirwalk v1.15.3
 github.com/karrick/godirwalk
 # github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
